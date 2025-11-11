@@ -52,11 +52,14 @@ This document provides step-by-step instructions for setting up the application 
     Group=ec2-user
     WorkingDirectory=/home/ec2-user/api-service
     Environment="PATH=/home/ec2-user/api-service/venv/bin"
+    Environment="API_KEY=supersecretkey"
     ExecStart=/home/ec2-user/api-service/venv/bin/gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b unix:/home/ec2-user/api-service/api.sock app.main:app
 
     [Install]
     WantedBy=multi-user.target
     ```
+
+    Note: Make sure to replace `supersecretkey` with your actual API key.
 
 2. Reload systemd and start the service:
     ```bash
