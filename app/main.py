@@ -35,7 +35,10 @@ app.add_middleware(
 async def check_api_key(request, call_next):
     api_key = request.headers.get("Authorization")
     if api_key != f"Bearer {SECRET_API_KEY}":
-        raise HTTPException(status_code=403, detail="Forbidden")
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Forbidden"},
+        )
     return await call_next(request)
 
 @app.post("/hello-world", response_class=JSONResponse)
