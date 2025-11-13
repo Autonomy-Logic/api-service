@@ -4,3 +4,4 @@ gunicorn
 python-multipart
 cryptography
 websockets
+python-socketio

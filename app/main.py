@@ -14,6 +14,7 @@ from urllib.parse import unquote
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from datetime import datetime
+import socketio
 
 app = FastAPI(title="OpenPLC Orchestrator API Service")
 SECRET_API_KEY = os.getenv("API_KEY")
@@ -24,7 +25,14 @@ if not SECRET_API_KEY:
 CERT_STORAGE_DIR = Path(os.getenv("CERT_STORAGE_DIR", "./certs"))
 CERT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-active_connections: Dict[str, WebSocket] = {}
+sio = socketio.AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins='*',
+    logger=True,
+    engineio_logger=True
+)
+
+active_connections: Dict[str, str] = {}  # agent_id -> session_id mapping
 
 
 def extract_cn_from_certificate(cert_pem: str) -> Optional[str]:
@@ -79,7 +87,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def check_api_key(request, call_next):
-    if request.url.path.startswith("/ws"):
+    if request.url.path.startswith("/ws") or request.url.path.startswith("/socket.io"):
         return await call_next(request)
     
     api_key = request.headers.get("Authorization")
@@ -180,6 +188,73 @@ def validate_client_certificate(cert_pem: str) -> Optional[str]:
         return None
 
 
+@sio.event
+async def connect(sid, environ):
+    """
+    Handle Socket.IO client connection with mTLS certificate validation.
+    """
+    print(f"Socket.IO connection attempt from session {sid}")
+    
+    client_cert_header = environ.get('HTTP_X_SSL_CLIENT_CERT', '')
+    
+    if client_cert_header:
+        print(f"Received client certificate header (length: {len(client_cert_header)})")
+        
+        try:
+            decoded_cert = unquote(client_cert_header)
+            client_cert_pem = decoded_cert.replace(" ", "\n")
+            client_cert_pem = client_cert_pem.replace("-----BEGIN\nCERTIFICATE-----", "-----BEGIN CERTIFICATE-----")
+            client_cert_pem = client_cert_pem.replace("-----END\nCERTIFICATE-----", "-----END CERTIFICATE-----")
+            
+            print(f"Decoded certificate (length: {len(client_cert_pem)})")
+            
+            validated_agent_id = validate_client_certificate(client_cert_pem)
+            
+            if not validated_agent_id:
+                print("Certificate validation failed: certificate not found or does not match stored certificate")
+                return False
+            
+            print(f"Client certificate validated successfully for agent: {validated_agent_id}")
+            active_connections[validated_agent_id] = sid
+            
+        except Exception as e:
+            print(f"Error processing client certificate: {str(e)}")
+            return False
+    else:
+        print("Warning: No client certificate provided (development mode)")
+    
+    print(f"Socket.IO client connected: {sid}")
+
+
+@sio.event
+async def disconnect(sid):
+    """
+    Handle Socket.IO client disconnection.
+    """
+    agent_id = None
+    for aid, session_id in active_connections.items():
+        if session_id == sid:
+            agent_id = aid
+            break
+    
+    if agent_id:
+        del active_connections[agent_id]
+        print(f"Agent {agent_id} disconnected (session {sid})")
+    else:
+        print(f"Socket.IO client disconnected: {sid}")
+
+
+@sio.event
+async def heartbeat(sid, data):
+    """
+    Handle heartbeat events from orchestrator agents.
+    """
+    print(f"Heartbeat received from session {sid}: {data}")
+    print(f"CPU: {data.get('cpu_usage')}, Memory: {data.get('memory_usage')}MB, Disk: {data.get('disk_usage')}MB")
+    
+    await sio.emit('heartbeat_ack', {'timestamp': datetime.now().isoformat()}, room=sid)
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """
@@ -257,3 +332,6 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"WebSocket error: {str(e)}")
         if agent_id and agent_id in active_connections:
             del active_connections[agent_id]
+
+# Wrap FastAPI app with Socket.IO ASGI app
+socket_app = socketio.ASGIApp(sio, app)
