@@ -10,6 +10,7 @@ import asyncio
 import json
 from typing import Dict, Optional
 from pathlib import Path
+from urllib.parse import unquote
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from datetime import datetime
@@ -78,6 +79,9 @@ app.add_middleware(
 
 @app.middleware("http")
 async def check_api_key(request, call_next):
+    if request.url.path.startswith("/ws"):
+        return await call_next(request)
+    
     api_key = request.headers.get("Authorization")
     if api_key != f"Bearer {SECRET_API_KEY}":
         return JSONResponse(
@@ -184,7 +188,7 @@ async def websocket_endpoint(websocket: WebSocket):
     
     For production with nginx:
     - Nginx should be configured to request client certificates
-    - The client certificate is passed via X-SSL-Client-Cert header
+    - The client certificate is passed via X-SSL-Client-Cert header (percent-encoded)
     
     For local development:
     - Accepts connections without client certificate validation
@@ -192,17 +196,28 @@ async def websocket_endpoint(websocket: WebSocket):
     client_cert_header = websocket.headers.get("X-SSL-Client-Cert", "")
     
     if client_cert_header:
-        client_cert_pem = client_cert_header.replace(" ", "\n")
-        client_cert_pem = client_cert_pem.replace("-----BEGIN\nCERTIFICATE-----", "-----BEGIN CERTIFICATE-----")
-        client_cert_pem = client_cert_pem.replace("-----END\nCERTIFICATE-----", "-----END CERTIFICATE-----")
+        print(f"Received client certificate header (length: {len(client_cert_header)})")
         
-        validated_agent_id = validate_client_certificate(client_cert_pem)
-        
-        if not validated_agent_id:
-            await websocket.close(code=1008, reason="Invalid client certificate")
+        try:
+            decoded_cert = unquote(client_cert_header)
+            client_cert_pem = decoded_cert.replace(" ", "\n")
+            client_cert_pem = client_cert_pem.replace("-----BEGIN\nCERTIFICATE-----", "-----BEGIN CERTIFICATE-----")
+            client_cert_pem = client_cert_pem.replace("-----END\nCERTIFICATE-----", "-----END CERTIFICATE-----")
+            
+            print(f"Decoded certificate (length: {len(client_cert_pem)})")
+            
+            validated_agent_id = validate_client_certificate(client_cert_pem)
+            
+            if not validated_agent_id:
+                print("Certificate validation failed: certificate not found or does not match stored certificate")
+                await websocket.close(code=1008, reason="Invalid client certificate")
+                return
+            
+            print(f"Client certificate validated successfully for agent: {validated_agent_id}")
+        except Exception as e:
+            print(f"Error processing client certificate: {str(e)}")
+            await websocket.close(code=1008, reason="Certificate processing error")
             return
-        
-        print(f"Client certificate validated for agent: {validated_agent_id}")
     else:
         print("Warning: No client certificate provided (development mode)")
     
