@@ -1,4 +1,6 @@
 fastapi
-uvicorn
+uvicorn[standard]
 gunicorn
 python-multipart
+cryptography
+websockets
