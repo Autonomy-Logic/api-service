@@ -90,7 +90,25 @@ server {
 
 ## Environment Configuration
 
-Set the certificate storage directory in the systemd service file (`/etc/systemd/system/api.service`):
+### Important: Socket.IO Single-Worker Requirement
+
+**⚠️ CRITICAL: Socket.IO requires running with a single gunicorn worker** to maintain session affinity during the HTTP polling → WebSocket upgrade process.
+
+**Why this is required:**
+- Socket.IO clients first connect via HTTP polling to establish a session
+- The server creates a session ID and sends it to the client
+- The client then attempts to upgrade to WebSocket using that session ID
+- With multiple workers, the upgrade request may hit a different worker that doesn't have the session
+- This causes "Invalid session" errors and connection rejection (403 Forbidden)
+
+**Solution:**
+- Use `-w 1` (single worker) in the gunicorn command
+- For horizontal scaling, run multiple instances behind a load balancer with sticky sessions
+- Add Redis manager for cross-instance broadcasting when scaling horizontally
+
+### Systemd Service Configuration
+
+Set the certificate storage directory and **single worker** in the systemd service file (`/etc/systemd/system/api.service`):
 
 ```ini
 [Unit]
@@ -104,7 +122,7 @@ WorkingDirectory=/home/ec2-user/api-service
 Environment="PATH=/home/ec2-user/api-service/venv/bin"
 Environment="API_KEY=your-secret-api-key"
 Environment="CERT_STORAGE_DIR=/var/orchestrator/certs"
-ExecStart=/home/ec2-user/api-service/venv/bin/gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b unix:/home/ec2-user/api-service/api.sock app.main:socket_app
+ExecStart=/home/ec2-user/api-service/venv/bin/gunicorn -w 1 -k uvicorn.workers.UvicornWorker -b unix:/home/ec2-user/api-service/api.sock app.main:socket_app
 
 [Install]
 WantedBy=multi-user.target

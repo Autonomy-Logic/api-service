@@ -239,6 +239,21 @@ For production deployment on AWS EC2 with nginx and Let's Encrypt SSL, see the d
 - **[AWS Setup Instructions](docs/setup_aws.md)**: Complete guide for deploying to EC2 with nginx, gunicorn, and Let's Encrypt
 - **[mTLS Setup Guide](docs/mtls_setup.md)**: Comprehensive guide for configuring mTLS authentication for WebSocket connections
 
+### Important: Socket.IO Single-Worker Requirement
+
+**⚠️ CRITICAL: Socket.IO requires running with a single gunicorn worker** to maintain session affinity during the HTTP polling → WebSocket upgrade process. Multiple workers will cause "Invalid session" errors because the upgrade request may hit a different worker than the one that created the session.
+
+**Systemd service configuration:**
+```ini
+ExecStart=/path/to/venv/bin/gunicorn -w 1 -k uvicorn.workers.UvicornWorker -b unix:/path/to/api.sock app.main:socket_app
+```
+
+**Key points:**
+- Use `-w 1` (single worker) for Socket.IO
+- Use `app.main:socket_app` (not `app.main:app`)
+- For horizontal scaling, run multiple instances behind a load balancer with sticky sessions
+- Add Redis manager for cross-instance broadcasting when scaling horizontally
+
 ### Quick Production Setup
 
 1. Install and configure the service:
@@ -246,9 +261,10 @@ For production deployment on AWS EC2 with nginx and Let's Encrypt SSL, see the d
 sudo ./install.sh
 ```
 
-2. Configure systemd service with environment variables:
+2. Configure systemd service with environment variables and **single worker (-w 1)**:
 ```bash
 sudo nano /etc/systemd/system/api.service
+# Ensure: -w 1 and app.main:socket_app
 ```
 
 3. Configure nginx as reverse proxy:
@@ -263,6 +279,7 @@ sudo certbot --nginx -d yourdomain.com -d api.yourdomain.com
 
 5. Start services:
 ```bash
+sudo systemctl daemon-reload
 sudo systemctl start api.service
 sudo systemctl enable api.service
 sudo systemctl reload nginx
@@ -351,6 +368,7 @@ api-service/
 - Verify `CERT_STORAGE_DIR` has correct permissions
 
 ### Socket.IO Connection Fails
+- **"Invalid session" errors**: This means multiple gunicorn workers are running. Change to `-w 1` in systemd service, run `sudo systemctl daemon-reload`, then `sudo systemctl restart api.service`
 - Check nginx configuration has `/socket.io/` location block with WebSocket upgrade headers
 - Verify client certificate is valid and uploaded
 - Check application logs for certificate validation errors: `sudo journalctl -u api.service -f`
