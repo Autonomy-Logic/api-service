@@ -6,18 +6,19 @@ Backend API service for the OpenPLC Orchestrator system. This service acts as a 
 
 The API Service provides:
 - **Certificate Management**: Upload and store agent certificates for mTLS authentication
-- **WebSocket Communication**: Secure WebSocket endpoint for orchestrator agents to connect and exchange messages
+- **Socket.IO Communication**: Secure Socket.IO endpoint for orchestrator agents to connect and exchange messages
 - **Authentication**: API key-based authentication for SaaS backend requests
 - **mTLS Support**: Mutual TLS authentication for orchestrator agent connections
 
 ## Architecture
 
 ```
-SaaS Backend → HTTPS/API Key → API Service → WebSocket/mTLS → Orchestrator Agents
+SaaS Backend → HTTPS/API Key → API Service → Socket.IO/mTLS → Orchestrator Agents
 ```
 
 The service uses:
 - **FastAPI** for the web framework
+- **Socket.IO** for real-time bidirectional communication with agents
 - **Uvicorn** as the ASGI server (development)
 - **Gunicorn + Uvicorn** for production deployment
 - **Nginx** as reverse proxy with SSL termination (production)
@@ -87,64 +88,64 @@ curl -X POST https://api.yourdomain.com/agent/certificate \
 - Verifies agent_id matches the CN exactly
 - Stores certificate in configured directory
 
-### 3. WebSocket /ws
+### 3. Socket.IO Connection
 
-WebSocket endpoint for orchestrator agents to connect using mTLS. Agents send heartbeat messages and receive commands.
+Socket.IO endpoint for orchestrator agents to connect using mTLS. Agents send heartbeat messages and receive commands via event-based communication.
 
 **Connection:**
 ```python
-import websockets
-import ssl
+import socketio
+import asyncio
 
-ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-ssl_context.load_cert_chain(
-    certfile="/path/to/agent/certificate.crt",
-    keyfile="/path/to/agent/private.key"
+# Create Socket.IO client with SSL session
+sio = socketio.AsyncClient(
+    reconnection=True,
+    reconnection_attempts=0,
+    reconnection_delay=1,
+    http_session=get_ssl_session()  # SSL session with client certificate
 )
 
-async with websockets.connect(
-    "wss://api.yourdomain.com/ws",
-    ssl=ssl_context
-) as websocket:
-    # Send heartbeat
-    await websocket.send(json.dumps({
-        "topic": "heartbeat",
-        "payload": {
-            "id": "07048933",
-            "cpu_usage": 0.5,
-            "memory_usage": 256,
-            "disk_usage": 1024,
-            "timestamp": "2025-11-13T12:00:00"
-        }
-    }))
-    
-    # Receive response
-    response = await websocket.recv()
+# Connect to server
+await sio.connect("https://api.yourdomain.com")
+
+# Emit heartbeat event
+await sio.emit("heartbeat", {
+    "cpu_usage": 0.5,
+    "memory_usage": 256,
+    "disk_usage": 1024,
+    "timestamp": "2025-11-13T12:00:00"
+})
+
+# Handle heartbeat acknowledgment
+@sio.on("heartbeat_ack")
+async def on_heartbeat_ack(data):
+    print(f"Heartbeat acknowledged: {data}")
+
+# Wait for events
+await sio.wait()
 ```
 
-**Message Format:**
-All messages use JSON with a topic-based routing system:
-```json
-{
-  "topic": "message_type",
-  "payload": {
-    "key": "value"
-  }
-}
-```
+**Protocol Details:**
+- Socket.IO uses HTTP polling initially at `/socket.io/` path
+- Upgrades to WebSocket after successful handshake
+- Event-based messaging (emit/on) instead of raw messages
+- Automatic reconnection with configurable retry logic
 
-**Supported Topics:**
-- `heartbeat`: Agent sends system status information
+**Supported Events:**
+- `connect`: Triggered when connection is established
+- `disconnect`: Triggered when connection is closed
+- `heartbeat`: Agent emits system status information
 - `heartbeat_ack`: Server acknowledges heartbeat
 
 **Authentication:** 
-- Production: Client certificate validated against stored certificates
+- Production: Client certificate validated against stored certificates during Socket.IO connect event
 - Development: No certificate validation (logs warning)
 
 **Certificate Validation:**
 - Nginx passes client certificate via `X-SSL-Client-Cert` header
-- Application validates certificate against stored certificates
-- Connection rejected if certificate is invalid or not found
+- Application validates certificate in Socket.IO connect handler
+- Connection rejected (returns False) if certificate is invalid or not found
+- Agent must present valid client certificate during TLS handshake
 
 ## Environment Variables
 
@@ -207,22 +208,28 @@ curl -X POST http://localhost:8000/agent/certificate \
   }'
 ```
 
-Test WebSocket connection:
+Test Socket.IO connection:
 ```python
 import asyncio
-import websockets
-import json
+import socketio
 
-async def test_websocket():
-    async with websockets.connect("ws://localhost:8000/ws") as ws:
-        await ws.send(json.dumps({
-            "topic": "heartbeat",
-            "payload": {"id": "test123", "cpu_usage": 0.5}
-        }))
-        response = await ws.recv()
-        print(response)
+async def test_socketio():
+    sio = socketio.AsyncClient()
+    
+    @sio.on('heartbeat_ack')
+    async def on_heartbeat_ack(data):
+        print(f"Heartbeat acknowledged: {data}")
+        await sio.disconnect()
+    
+    await sio.connect("http://localhost:8000")
+    await sio.emit("heartbeat", {
+        "cpu_usage": 0.5,
+        "memory_usage": 256,
+        "disk_usage": 1024
+    })
+    await sio.wait()
 
-asyncio.run(test_websocket())
+asyncio.run(test_socketio())
 ```
 
 ## Production Deployment
@@ -303,7 +310,8 @@ api-service/
 - **gunicorn**: Production WSGI/ASGI server
 - **python-multipart**: Form and file upload support
 - **cryptography**: Certificate parsing and validation
-- **websockets**: WebSocket protocol implementation
+- **websockets**: WebSocket protocol implementation (legacy, kept for compatibility)
+- **python-socketio**: Socket.IO server implementation for real-time communication
 
 ## Security
 
@@ -342,16 +350,19 @@ api-service/
 - Ensure agent_id matches CN exactly
 - Verify `CERT_STORAGE_DIR` has correct permissions
 
-### WebSocket Connection Fails
-- Check nginx configuration for WebSocket upgrade headers
+### Socket.IO Connection Fails
+- Check nginx configuration has `/socket.io/` location block with WebSocket upgrade headers
 - Verify client certificate is valid and uploaded
-- Check application logs for certificate validation errors
+- Check application logs for certificate validation errors: `sudo journalctl -u api.service -f`
 - Ensure nginx is passing `X-SSL-Client-Cert` header
+- Verify systemd service is using `app.main:socket_app` (not `app.main:app`)
+- Check that orchestrator-agent is using Socket.IO client (not raw WebSocket)
 
 ### mTLS Not Working
 - Verify nginx is requesting client certificates (`ssl_verify_client optional_no_ca`)
 - Check that client certificate is being passed to backend
 - Verify certificate storage directory exists and has correct permissions
+- Ensure `/socket.io/` location block includes `proxy_set_header X-SSL-Client-Cert $ssl_client_escaped_cert`
 - See [docs/mtls_setup.md](docs/mtls_setup.md) for detailed troubleshooting
 
 ## Contributing
