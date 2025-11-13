@@ -151,13 +151,61 @@ async def upload_agent_certificate(request: Request):
     }
 
 
+def validate_client_certificate(cert_pem: str) -> Optional[str]:
+    """
+    Validate a client certificate against stored certificates.
+    Returns the agent_id if valid, None otherwise.
+    """
+    try:
+        cn = extract_cn_from_certificate(cert_pem)
+        if not cn:
+            return None
+        
+        stored_cert_path = get_agent_certificate_path(cn)
+        if not stored_cert_path:
+            return None
+        
+        stored_cert = stored_cert_path.read_text()
+        
+        if cert_pem.strip() == stored_cert.strip():
+            return cn
+        
+        return None
+    except Exception as e:
+        print(f"Certificate validation error: {str(e)}")
+        return None
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for orchestrator agents to connect using mTLS.
-    This endpoint accepts connections from agents that have their certificates
-    registered via the /agent/certificate endpoint.
+    This endpoint validates client certificates against stored certificates.
+    
+    For production with nginx:
+    - Nginx should be configured to request client certificates
+    - The client certificate is passed via X-SSL-Client-Cert header
+    
+    For local development:
+    - Accepts connections without client certificate validation
     """
+    client_cert_header = websocket.headers.get("X-SSL-Client-Cert", "")
+    
+    if client_cert_header:
+        client_cert_pem = client_cert_header.replace(" ", "\n")
+        client_cert_pem = client_cert_pem.replace("-----BEGIN\nCERTIFICATE-----", "-----BEGIN CERTIFICATE-----")
+        client_cert_pem = client_cert_pem.replace("-----END\nCERTIFICATE-----", "-----END CERTIFICATE-----")
+        
+        validated_agent_id = validate_client_certificate(client_cert_pem)
+        
+        if not validated_agent_id:
+            await websocket.close(code=1008, reason="Invalid client certificate")
+            return
+        
+        print(f"Client certificate validated for agent: {validated_agent_id}")
+    else:
+        print("Warning: No client certificate provided (development mode)")
+    
     await websocket.accept()
     
     agent_id = None
