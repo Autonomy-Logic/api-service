@@ -17,11 +17,10 @@ from datetime import datetime
 app = FastAPI(title="OpenPLC Orchestrator API Service")
 SECRET_API_KEY = os.getenv("API_KEY")
 
-# check that the API key is set
 if not SECRET_API_KEY:
     raise ValueError("API_KEY environment variable is not set")
 
-CERT_STORAGE_DIR = Path("/var/orchestrator/certs")
+CERT_STORAGE_DIR = Path(os.getenv("CERT_STORAGE_DIR", "./certs"))
 CERT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 active_connections: Dict[str, WebSocket] = {}
