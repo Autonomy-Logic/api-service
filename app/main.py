@@ -171,19 +171,23 @@ async def get_agent_heartbeat(request: Request):
     
     Expected JSON body:
     {
-        "agent_id": "07048933"
+        "agent_id": "2A6907E7"
     }
     
     Returns:
     {
-        "agent_id": "07048933",
-        "cpu_usage": 0.5,
-        "memory_usage": 256,
-        "disk_usage": 1024,
-        "uptime": 32874,
+        "agent_id": "2A6907E7",
+        "cpu_usage": 0.2,
+        "memory_usage": 3.3,
+        "memory_total": 31.3,
+        "disk_usage": 314.3,
+        "disk_total": 494.5,
+        "uptime": 24,
         "status": "active",
-        "timestamp": "2025-11-14T07:25:43.335677"
+        "timestamp": "2025-11-14T09:07:51.654590"
     }
+    
+    Status will be "inactive" if socket connection is lost/closed/has problems.
     """
     try:
         data = await request.json()
@@ -204,7 +208,9 @@ async def get_agent_heartbeat(request: Request):
         "agent_id": agent_id,
         "cpu_usage": heartbeat_data.get("cpu_usage"),
         "memory_usage": heartbeat_data.get("memory_usage"),
+        "memory_total": heartbeat_data.get("memory_total"),
         "disk_usage": heartbeat_data.get("disk_usage"),
+        "disk_total": heartbeat_data.get("disk_total"),
         "uptime": heartbeat_data.get("uptime"),
         "status": heartbeat_data.get("status"),
         "timestamp": heartbeat_data.get("timestamp")
@@ -287,6 +293,8 @@ async def disconnect(sid):
     
     if agent_id:
         del active_connections[agent_id]
+        if agent_id in agent_heartbeat_data:
+            agent_heartbeat_data[agent_id]['status'] = 'inactive'
         print(f"Agent {agent_id} disconnected (session {sid})")
     else:
         print(f"Socket.IO client disconnected: {sid}")
@@ -310,7 +318,9 @@ async def heartbeat(sid, data):
         agent_heartbeat_data[agent_id] = {
             'cpu_usage': data.get('cpu_usage'),
             'memory_usage': data.get('memory_usage'),
+            'memory_total': data.get('memory_total'),
             'disk_usage': data.get('disk_usage'),
+            'disk_total': data.get('disk_total'),
             'uptime': data.get('uptime'),
             'status': data.get('status'),
             'timestamp': data.get('timestamp')
