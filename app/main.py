@@ -33,6 +33,7 @@ sio = socketio.AsyncServer(
 )
 
 active_connections: Dict[str, str] = {}  # agent_id -> session_id mapping
+agent_heartbeat_data: Dict[str, Dict] = {}  # agent_id -> heartbeat data mapping
 
 
 def extract_cn_from_certificate(cert_pem: str) -> Optional[str]:
@@ -163,6 +164,49 @@ async def upload_agent_certificate(request: Request):
     }
 
 
+@app.post("/agent/heartbeat", response_class=JSONResponse)
+async def get_agent_heartbeat(request: Request):
+    """
+    Query the current heartbeat data for a specific agent.
+    
+    Expected JSON body:
+    {
+        "agent_id": "07048933"
+    }
+    
+    Returns:
+    {
+        "agent_id": "07048933",
+        "cpu_usage": 0.5,
+        "memory_usage": 256,
+        "disk_usage": 1024,
+        "timestamp": "2025-11-14T07:25:43.335677"
+    }
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+    
+    agent_id = data.get("agent_id")
+    
+    if not agent_id or not isinstance(agent_id, str):
+        raise HTTPException(status_code=400, detail="Missing or invalid 'agent_id' field")
+    
+    if agent_id not in agent_heartbeat_data:
+        raise HTTPException(status_code=404, detail=f"No heartbeat data found for agent {agent_id}")
+    
+    heartbeat_data = agent_heartbeat_data[agent_id]
+    
+    return {
+        "agent_id": agent_id,
+        "cpu_usage": heartbeat_data.get("cpu_usage"),
+        "memory_usage": heartbeat_data.get("memory_usage"),
+        "disk_usage": heartbeat_data.get("disk_usage"),
+        "timestamp": heartbeat_data.get("timestamp")
+    }
+
+
 def validate_client_certificate(cert_pem: str) -> Optional[str]:
     """
     Validate a client certificate against stored certificates.
@@ -251,6 +295,21 @@ async def heartbeat(sid, data):
     """
     print(f"Heartbeat received from session {sid}: {data}")
     print(f"CPU: {data.get('cpu_usage')}, Memory: {data.get('memory_usage')}MB, Disk: {data.get('disk_usage')}MB")
+    
+    agent_id = None
+    for aid, session_id in active_connections.items():
+        if session_id == sid:
+            agent_id = aid
+            break
+    
+    if agent_id:
+        agent_heartbeat_data[agent_id] = {
+            'cpu_usage': data.get('cpu_usage'),
+            'memory_usage': data.get('memory_usage'),
+            'disk_usage': data.get('disk_usage'),
+            'timestamp': data.get('timestamp')
+        }
+        print(f"Stored heartbeat data for agent {agent_id}")
     
     await sio.emit('heartbeat_ack', {'timestamp': datetime.now().isoformat()}, room=sid)
 
