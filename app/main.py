@@ -180,6 +180,8 @@ async def get_agent_heartbeat(request: Request):
         "cpu_usage": 0.5,
         "memory_usage": 256,
         "disk_usage": 1024,
+        "uptime": 32874,
+        "status": "active",
         "timestamp": "2025-11-14T07:25:43.335677"
     }
     """
@@ -203,6 +205,8 @@ async def get_agent_heartbeat(request: Request):
         "cpu_usage": heartbeat_data.get("cpu_usage"),
         "memory_usage": heartbeat_data.get("memory_usage"),
         "disk_usage": heartbeat_data.get("disk_usage"),
+        "uptime": heartbeat_data.get("uptime"),
+        "status": heartbeat_data.get("status"),
         "timestamp": heartbeat_data.get("timestamp")
     }
 
@@ -307,6 +311,8 @@ async def heartbeat(sid, data):
             'cpu_usage': data.get('cpu_usage'),
             'memory_usage': data.get('memory_usage'),
             'disk_usage': data.get('disk_usage'),
+            'uptime': data.get('uptime'),
+            'status': data.get('status'),
             'timestamp': data.get('timestamp')
         }
         print(f"Stored heartbeat data for agent {agent_id}")
