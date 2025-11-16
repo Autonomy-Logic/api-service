@@ -33,6 +33,7 @@ sio = socketio.AsyncServer(
 )
 
 active_connections: Dict[str, str] = {}  # agent_id -> session_id mapping
+session_to_agent: Dict[str, str] = {}  # session_id -> agent_id mapping (reverse lookup)
 agent_heartbeat_data: Dict[str, Dict] = {}  # agent_id -> heartbeat data mapping
 
 
@@ -269,7 +270,13 @@ async def connect(sid, environ):
                 return False
             
             print(f"Client certificate validated successfully for agent: {validated_agent_id}")
+            
+            old_sid = active_connections.get(validated_agent_id)
+            if old_sid and old_sid != sid:
+                session_to_agent.pop(old_sid, None)
+            
             active_connections[validated_agent_id] = sid
+            session_to_agent[sid] = validated_agent_id
             
         except Exception as e:
             print(f"Error processing client certificate: {str(e)}")
@@ -285,14 +292,10 @@ async def disconnect(sid):
     """
     Handle Socket.IO client disconnection.
     """
-    agent_id = None
-    for aid, session_id in active_connections.items():
-        if session_id == sid:
-            agent_id = aid
-            break
+    agent_id = session_to_agent.pop(sid, None)
     
     if agent_id:
-        del active_connections[agent_id]
+        active_connections.pop(agent_id, None)
         if agent_id in agent_heartbeat_data:
             agent_heartbeat_data[agent_id]['status'] = 'inactive'
         print(f"Agent {agent_id} disconnected (session {sid})")
@@ -308,11 +311,7 @@ async def heartbeat(sid, data):
     print(f"Heartbeat received from session {sid}: {data}")
     print(f"CPU: {data.get('cpu_usage')}, Memory: {data.get('memory_usage')}MB, Disk: {data.get('disk_usage')}MB")
     
-    agent_id = None
-    for aid, session_id in active_connections.items():
-        if session_id == sid:
-            agent_id = aid
-            break
+    agent_id = session_to_agent.get(sid)
     
     if agent_id:
         agent_heartbeat_data[agent_id] = {
